@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react"
 import { CURRENT_USER_ID, type FoodListing } from "@/context/listings-context"
+import { useEffect, useRef } from "react"
 
 type Contact = {
   id: string
@@ -96,6 +97,48 @@ export function MessagesProvider({ children }: { children: ReactNode }) {
     INITIAL_CONVERSATIONS
   )
 
+  const wsRef = useRef<WebSocket | null>(null)
+
+  useEffect(() => {
+      const ws = new WebSocket(
+          `ws://localhost:8080?roomId=listing-1&role=buyer`
+      )
+
+      ws.onopen = () => {
+          console.log("Connected to server")
+      }
+
+      ws.onmessage = (event) => {
+          const { contactId, body } = JSON.parse(event.data)
+          setConversations((prev) => {
+              const current = prev[contactId] ?? { contactId, messages: [] }
+              return {
+                  ...prev,
+                  [contactId]: {
+                      ...current,
+                      messages: [
+                          ...current.messages,
+                          {
+                              id: crypto.randomUUID(),
+                              fromId: contactId,
+                              body,
+                              createdAt: new Date().toISOString(),
+                          },
+                      ],
+                  },
+              }
+          })
+      }
+
+      ws.onclose = () => {
+          console.log("Disconnected from server")
+      }
+
+      wsRef.current = ws
+
+      return () => ws.close()
+  }, [])
+
   const getContactName = useCallback((contactId: string) => {
     return CONTACTS.find((c) => c.id === contactId)?.name ?? "Unknown User"
   }, [])
@@ -139,27 +182,32 @@ export function MessagesProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const sendMessage = useCallback((contactId: string, body: string, imageUrl?: string) => {
-    const trimmed = body.trim()
-    if (!trimmed && !imageUrl) return
-    setConversations((prev) => {
-      const current = prev[contactId] ?? { contactId, messages: [] }
-      return {
-        ...prev,
-        [contactId]: {
-          ...current,
-          messages: [
-            ...current.messages,
-            {
-              id: crypto.randomUUID(),
-              fromId: CURRENT_USER_ID,
-              body: trimmed || undefined,
-              imageUrl,
-              createdAt: new Date().toISOString(),
-            },
-          ],
-        },
-      }
-    })
+      const trimmed = body.trim()
+      if (!trimmed && !imageUrl) return
+
+      // Send over WebSocket
+      wsRef.current?.send(JSON.stringify({ contactId, body: trimmed }))
+
+      // Still update local state so sender sees their own message
+      setConversations((prev) => {
+          const current = prev[contactId] ?? { contactId, messages: [] }
+          return {
+              ...prev,
+              [contactId]: {
+                  ...current,
+                  messages: [
+                      ...current.messages,
+                      {
+                          id: crypto.randomUUID(),
+                          fromId: CURRENT_USER_ID,
+                          body: trimmed || undefined,
+                          imageUrl,
+                          createdAt: new Date().toISOString(),
+                      },
+                  ],
+              },
+          }
+      })
   }, [])
 
   const value = useMemo(
